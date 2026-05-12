@@ -7,9 +7,10 @@ Project home: [github.com/guaranaja/modi_trayhammer](https://github.com/guaranaj
 ## What it does
 
 - **Interactive prompts** — no editing source needed. Pick Boxi fraction, layout, packing style, output filename.
-- **Two packing styles**:
+- **Three packing styles**:
     - **Banded** *(default)* — each base size in one horizontal row, largest at top, items centered with equal spacing. Hex fallback per band when tight. Maximum density, intentional look.
-    - **Fractal** — Apollonian-inspired greedy packing. Largest item anchors the center, subsequent items snug into the tightest valid tangent position (tangent-to-one, tangent-to-two, or tangent-to-edge). Mixed sizes intermingle organically. Lower density than banded — trade density for aesthetic.
+    - **Fractal** — Apollonian-inspired greedy packing. Largest item anchors the center, subsequent items snug into the tightest valid tangent position (tangent-to-one, tangent-to-two, or tangent-to-edge). Mixed sizes intermingle organically. Lower density than banded.
+    - **Uniform** — single hex lattice where every adjacent pair is at the same center-to-center pitch. Sizes intermix on the grid, larger items cluster centrally. Pitch starts at the worst-pair envelope distance and auto-tightens (with a printed warning) if needed to fit all requested items.
 - **Model-envelope-aware spacing** — center-to-center pitch is auto-set per base size from a table of typical model widths (e.g. Intercessors on 32mm bases need ~42mm pitch, not 35mm, to keep shoulders and bolters from touching). Add extra padding interactively if you want more breathing room.
 - **Overpopulation alarm** — if your layout doesn't fit, you get a loud, specific warning telling you what was dropped and how to fix it.
 - **Washer pockets (advanced option)** — drill a centered pocket into each recess floor sized for a standard metric flat washer (M2–M5). Drop a washer in, glue a magnet into your mini's base, and the mini sticks — no polarity issues, since steel attracts both poles equally. Plate thickness auto-bumps if the washer is thicker than the existing floor.

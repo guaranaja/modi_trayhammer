@@ -562,6 +562,155 @@ def pack_fractal(layout, plate_w, plate_h,
              'unplaced_items': unplaced})
 
 
+def pack_uniform(layout, plate_w, plate_h,
+                 clearance=DEFAULT_CLEARANCE,
+                 extra_spacing=0.0,
+                 wall=WALL_MIN,
+                 margin_x=EDGE_MARGIN_X,
+                 margin_y=EDGE_MARGIN_Y):
+    """
+    Uniform-pitch hex lattice — every adjacent pair sits at the same
+    center-to-center distance. Sizes intermix on the same grid, with
+    larger items biased toward the plate center.
+
+    Pitch starts at the worst-pair envelope distance (max over all
+    same-size pairs present). If that doesn't give enough lattice slots
+    for the requested items, pitch is auto-reduced — down to the floor
+    `largest_d + wall` — and a warning is printed describing how much
+    envelope clearance was sacrificed.
+    """
+    items = []
+    for s, c in layout.items():
+        if s not in SUPPORTED_BASES:
+            print(f"  NOTE: {s}mm is not a standard 40K base size — using anyway")
+        for _ in range(c):
+            items.append((s, s + clearance))
+    if not items:
+        return [], {'placed': 0, 'unplaced': 0, 'unplaced_items': []}
+    items.sort(key=lambda x: (-x[1], -x[0]))
+    n_items = len(items)
+
+    sizes_present = sorted(set(layout.keys()), reverse=True)
+    biggest = sizes_present[0]
+    biggest_d = biggest + clearance
+    biggest_r = biggest_d / 2
+
+    def pair_distance(s1, s2):
+        d1 = s1 + clearance
+        d2 = s2 + clearance
+        env1 = MODEL_ENVELOPE.get(s1, d1)
+        env2 = MODEL_ENVELOPE.get(s2, d2)
+        return max((d1 + d2) / 2 + wall,
+                   (env1 + env2) / 2 + MODEL_CLEARANCE)
+
+    ideal_pitch = max(pair_distance(s, s) for s in sizes_present)
+    min_pitch = biggest_d + wall  # absolute floor: bases don't overlap
+
+    bound_l = margin_x + biggest_r
+    bound_r = plate_w - margin_x - biggest_r
+    bound_b = margin_y + biggest_r
+    bound_t = plate_h - margin_y - biggest_r
+    span_x = max(0.0, bound_r - bound_l)
+    span_y = max(0.0, bound_t - bound_b)
+
+    def hex_capacity(pitch):
+        if pitch <= 0:
+            return 0, None
+        row_pitch = pitch * math.sqrt(3) / 2
+        if row_pitch <= 0:
+            return 0, None
+        n_rows = int(span_y / row_pitch + 1e-9) + 1
+        if n_rows < 1:
+            return 0, None
+        cols0 = int(span_x / pitch + 1e-9) + 1
+        if span_x + 1e-9 >= pitch / 2:
+            cols1 = int((span_x - pitch / 2) / pitch + 1e-9) + 1
+        else:
+            cols1 = 0
+        cols1 = max(0, min(cols1, cols0))
+        per_row = [cols0 if i % 2 == 0 else cols1 for i in range(n_rows)]
+        return sum(per_row), (per_row, row_pitch, n_rows)
+
+    # Search for largest pitch that gives >= n_items slots, between
+    # min_pitch and ideal_pitch. Step down in 0.25mm increments.
+    pitch_used = ideal_pitch
+    cap, info = hex_capacity(pitch_used)
+    if cap < n_items:
+        candidate = ideal_pitch
+        best = None
+        while candidate >= min_pitch:
+            c, ifo = hex_capacity(candidate)
+            if c >= n_items:
+                best = (candidate, c, ifo)
+            candidate -= 0.25
+        if best is not None:
+            pitch_used, cap, info = best
+        else:
+            pitch_used = min_pitch
+            cap, info = hex_capacity(pitch_used)
+
+    pitch_used += extra_spacing
+    cap, info = hex_capacity(pitch_used)
+
+    if pitch_used + 1e-6 < ideal_pitch:
+        diff = ideal_pitch - pitch_used
+        print(f"  NOTE: pitch reduced to {pitch_used:.2f} mm to fit "
+              f"{n_items} items in a uniform hex lattice.")
+        print(f"        Ideal envelope pitch was {ideal_pitch:.2f} mm "
+              f"({diff:.1f} mm tighter than model envelopes prefer).")
+        print(f"        Plate-side wall is still {pitch_used - biggest_d:.2f} mm "
+              f"for the {biggest}mm bases (vs {wall:.2f} mm minimum).")
+
+    if info is None:
+        return [], {'placed': 0, 'unplaced': n_items,
+                    'unplaced_items': [(s, d) for s, d in items]}
+
+    per_row, row_pitch, n_rows = info
+    cap = sum(per_row)
+
+    # Generate lattice positions. Center the lattice horizontally (use the
+    # widest row's width as bbox) and vertically.
+    cols0 = per_row[0]
+    lattice_w = max(
+        (cols0 - 1) * pitch_used,
+        (per_row[1] - 1) * pitch_used + pitch_used / 2 if n_rows > 1 else 0,
+    )
+    x_translate = (span_x - lattice_w) / 2
+    lattice_h = (n_rows - 1) * row_pitch
+    y_translate = (span_y - lattice_h) / 2
+
+    positions = []
+    for i_row in range(n_rows):
+        n_cols = per_row[i_row]
+        if n_cols == 0:
+            continue
+        x_off = pitch_used / 2 if i_row % 2 == 1 else 0.0
+        cy = bound_t - y_translate - i_row * row_pitch
+        for i_col in range(n_cols):
+            cx = bound_l + x_translate + x_off + i_col * pitch_used
+            positions.append((cx, cy))
+
+    # Sort positions by distance from plate center (closest first) so
+    # largest items land in the middle and any spare slots end up at corners.
+    cx_plate = plate_w / 2
+    cy_plate = plate_h / 2
+    positions.sort(key=lambda p: (p[0] - cx_plate) ** 2 + (p[1] - cy_plate) ** 2)
+
+    placements = []
+    n_to_place = min(n_items, len(positions))
+    for i in range(n_to_place):
+        cx, cy = positions[i]
+        _base, d = items[i]
+        placements.append((cx, cy, d))
+
+    unplaced = [(s, d) for (s, d) in items[n_to_place:]]
+    return placements, {
+        'placed': len(placements),
+        'unplaced': len(unplaced),
+        'unplaced_items': unplaced,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tray builder — outer polygon with tabs, plus holes
 # ---------------------------------------------------------------------------
@@ -615,7 +764,10 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
                          f"Available: {list(BOXI_SIZES.keys())}")
     plate_w, plate_h = BOXI_SIZES[key]
 
-    packer = pack_fractal if style == 'fractal' else pack_gracefully
+    packer = {
+        'fractal': pack_fractal,
+        'uniform': pack_uniform,
+    }.get(style, pack_gracefully)
     placements, summary = packer(
         layout, plate_w, plate_h,
         clearance=clearance, extra_spacing=extra_spacing,
@@ -996,10 +1148,12 @@ def interactive():
     print()
     print("Packing style:")
     print("  1) banded   — same-size rows, largest at top, clean and intentional")
-    print("  2) fractal  — mixed sizes inter-mingle organically (Apollonian-ish)")
+    print("  2) fractal  — mixed sizes intermingle organically (Apollonian-ish)")
+    print("  3) uniform  — single hex lattice, every pair evenly spaced,")
+    print("                sizes intermix on the grid (pitch may auto-tighten)")
     style_choice = _ask("Pick style", default='1',
-                        validator=_validate_choice(('1', '2')))
-    style = 'fractal' if style_choice == '2' else 'banded'
+                        validator=_validate_choice(('1', '2', '3')))
+    style = {'1': 'banded', '2': 'fractal', '3': 'uniform'}[style_choice]
 
     print("\nSpacing is auto-set per base size from MODEL_ENVELOPE so adjacent")
     print("minis don't physically collide above the tray (e.g. Intercessor")
