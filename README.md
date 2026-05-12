@@ -4,6 +4,18 @@ Parametric Warhammer 40K mini tray generator. Outputs STL files sized to drop in
 
 Project home: [github.com/guaranaja/modi_trayhammer](https://github.com/guaranaja/modi_trayhammer)
 
+## Run it in your browser
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/guaranaja/modi_trayhammer)
+
+Click the badge above to spin up a free GitHub Codespace with everything preinstalled. Once the container builds:
+
+```
+python traygen.py
+```
+
+When the script writes your `.stl`, right-click it in the file explorer and pick **Download** to pull it to your local machine, then slice + print as usual.
+
 ## What it does
 
 - **Interactive prompts** — no editing source needed. Pick Boxi fraction, layout, packing style, output filename.
@@ -15,13 +27,13 @@ Project home: [github.com/guaranaja/modi_trayhammer](https://github.com/guaranaj
 - **Overpopulation alarm** — if your layout doesn't fit, you get a loud, specific warning telling you what was dropped and how to fix it.
 - **Washer pockets (advanced option)** — drill a centered pocket into each recess floor sized for a standard metric flat washer (M2–M5). Drop a washer in, glue a magnet into your mini's base, and the mini sticks — no polarity issues, since steel attracts both poles equally. Plate thickness auto-bumps if the washer is thicker than the existing floor.
 
-## Requirements
+## Local install
 
 ```
-pip install numpy mapbox-earcut
+pip install -r requirements.txt
 ```
 
-(`numpy-stl` is mentioned in older docs but isn't required — STL is written manually.)
+(or just `pip install numpy mapbox-earcut`. The older docs mention `numpy-stl`; it isn't required — STL is written manually.)
 
 ## Usage
 
