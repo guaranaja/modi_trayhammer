@@ -407,6 +407,161 @@ def pack_gracefully(layout, plate_w, plate_h,
     }
 
 
+def pack_fractal(layout, plate_w, plate_h,
+                 clearance=DEFAULT_CLEARANCE,
+                 extra_spacing=0.0,
+                 wall=WALL_MIN,
+                 margin_x=EDGE_MARGIN_X,
+                 margin_y=EDGE_MARGIN_Y):
+    """
+    Mixed-size packing inspired by Apollonian gaskets. Largest items anchor
+    at the plate center; each subsequent item is placed at the tangent
+    position with the most contact against existing items (snugness),
+    breaking ties toward the plate center.
+
+    Produces an organic, fractal-looking layout where small items naturally
+    fill gaps between larger ones — unlike banded packing, sizes intermix.
+    """
+    for base in layout:
+        if base not in SUPPORTED_BASES:
+            print(f"  NOTE: {base}mm is not a standard 40K base size — using anyway")
+
+    items = []
+    for s, c in layout.items():
+        if c <= 0:
+            continue
+        for _ in range(c):
+            items.append((s, s + clearance))
+    # Largest first, with deterministic tie-break by base size descending
+    items.sort(key=lambda x: (-x[1], -x[0]))
+
+    if not items:
+        return [], {'placed': 0, 'unplaced': 0, 'unplaced_items': []}
+
+    def required(base1, d1, base2, d2):
+        env1 = MODEL_ENVELOPE.get(base1, d1)
+        env2 = MODEL_ENVELOPE.get(base2, d2)
+        return max((d1 + d2) / 2 + wall,
+                   (env1 + env2) / 2 + MODEL_CLEARANCE) + extra_spacing
+
+    placements = []  # (cx, cy, d, base)
+    unplaced = []
+    cx_plate = plate_w / 2
+    cy_plate = plate_h / 2
+
+    def in_bounds(cx, cy, d):
+        r = d / 2
+        return (cx - r >= margin_x - 1e-6 and
+                cx + r <= plate_w - margin_x + 1e-6 and
+                cy - r >= margin_y - 1e-6 and
+                cy + r <= plate_h - margin_y + 1e-6)
+
+    def collides(cx, cy, base, d):
+        # 0.05mm linear tolerance — looser than 1e-4 mm² (which was tighter
+        # than the FP error in the tangent-to-two math, causing valid
+        # candidates to be falsely rejected as collisions).
+        tol = 0.05
+        for ex, ey, ed, ebase in placements:
+            need = required(base, d, ebase, ed)
+            dist = math.hypot(cx - ex, cy - ey)
+            if dist < need - tol:
+                return True
+        return False
+
+    def score(cx, cy, base, d):
+        # Primary: count near-tangent contacts (snugness).
+        # Tie-break 1: minimize distance to nearest existing item (pack tight).
+        # Tie-break 2: prefer positions nearer the plate center (symmetry).
+        contacts = 0
+        min_dist = float('inf')
+        for ex, ey, ed, ebase in placements:
+            need = required(base, d, ebase, ed)
+            actual = math.hypot(cx - ex, cy - ey)
+            if abs(actual - need) < 1.0:
+                contacts += 1
+            if actual < min_dist:
+                min_dist = actual
+        center_dist = math.hypot(cx - cx_plate, cy - cy_plate)
+        return (contacts, -min_dist, -center_dist)
+
+    def tangent_to_two(A, dA, B, dB):
+        # Two positions equidistant dA from A and dB from B (mirrored across AB).
+        xa, ya = A; xb, yb = B
+        dx = xb - xa; dy = yb - ya
+        L = math.hypot(dx, dy)
+        if L < 1e-9 or L > dA + dB + 1e-9 or L + 1e-9 < abs(dA - dB):
+            return []
+        a = (dA * dA - dB * dB + L * L) / (2 * L)
+        h_sq = dA * dA - a * a
+        if h_sq < 0:
+            return []
+        h = math.sqrt(h_sq)
+        mx = xa + a * dx / L
+        my = ya + a * dy / L
+        # Perpendicular unit vector
+        px = -dy / L
+        py = dx / L
+        return [(mx + h * px, my + h * py),
+                (mx - h * px, my - h * py)]
+
+    # Place each item in turn
+    n_angles = 30
+    for base, d in items:
+        r = d / 2
+        cands = []
+        if not placements:
+            cands.append((cx_plate, cy_plate))
+        else:
+            # Tangent-to-one: angles around every existing placement
+            for ex, ey, ed, ebase in placements:
+                need = required(base, d, ebase, ed)
+                for k in range(n_angles):
+                    ang = 2 * math.pi * k / n_angles
+                    cands.append((ex + need * math.cos(ang),
+                                  ey + need * math.sin(ang)))
+            # Tangent-to-two: pressed into the gap between every pair.
+            # This is what makes the packing actually fractal.
+            n_placed = len(placements)
+            for i in range(n_placed):
+                ex_i, ey_i, ed_i, eb_i = placements[i]
+                need_i = required(base, d, eb_i, ed_i)
+                for j in range(i + 1, n_placed):
+                    ex_j, ey_j, ed_j, eb_j = placements[j]
+                    need_j = required(base, d, eb_j, ed_j)
+                    cands.extend(tangent_to_two(
+                        (ex_i, ey_i), need_i, (ex_j, ey_j), need_j,
+                    ))
+            # Tangent to one existing item AND a plate edge
+            for ex, ey, ed, ebase in placements:
+                need = required(base, d, ebase, ed)
+                for edge_y in (margin_y + r, plate_h - margin_y - r):
+                    dy = edge_y - ey
+                    if abs(dy) <= need:
+                        dx = math.sqrt(max(0, need * need - dy * dy))
+                        cands.append((ex + dx, edge_y))
+                        cands.append((ex - dx, edge_y))
+                for edge_x in (margin_x + r, plate_w - margin_x - r):
+                    dx = edge_x - ex
+                    if abs(dx) <= need:
+                        dy = math.sqrt(max(0, need * need - dx * dx))
+                        cands.append((edge_x, ey + dy))
+                        cands.append((edge_x, ey - dy))
+
+        valid = [(cx, cy) for cx, cy in cands
+                 if in_bounds(cx, cy, d) and not collides(cx, cy, base, d)]
+        if not valid:
+            unplaced.append((base, d))
+            continue
+
+        best = max(valid, key=lambda p: score(p[0], p[1], base, d))
+        placements.append((best[0], best[1], d, base))
+
+    return ([(cx, cy, d) for cx, cy, d, _b in placements],
+            {'placed': len(placements),
+             'unplaced': len(unplaced),
+             'unplaced_items': unplaced})
+
+
 # ---------------------------------------------------------------------------
 # Tray builder — outer polygon with tabs, plus holes
 # ---------------------------------------------------------------------------
@@ -445,7 +600,7 @@ def build_outer_polygon(plate_w, plate_h, with_tabs=True):
 
 
 def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
-               extra_spacing=0.0, magnet=None):
+               extra_spacing=0.0, magnet=None, style='banded'):
     """
     Build a tray Mesh.
 
@@ -460,7 +615,8 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
                          f"Available: {list(BOXI_SIZES.keys())}")
     plate_w, plate_h = BOXI_SIZES[key]
 
-    placements, summary = pack_gracefully(
+    packer = pack_fractal if style == 'fractal' else pack_gracefully
+    placements, summary = packer(
         layout, plate_w, plate_h,
         clearance=clearance, extra_spacing=extra_spacing,
     )
@@ -635,8 +791,10 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
 # ---------------------------------------------------------------------------
 
 def generate(boxi_size, fraction, layout, output_path="tray.stl",
-             clearance=DEFAULT_CLEARANCE, extra_spacing=0.0, magnet=None):
+             clearance=DEFAULT_CLEARANCE, extra_spacing=0.0, magnet=None,
+             style='banded'):
     print(f"Boxi: {boxi_size}, Fraction: {fraction}")
+    print(f"Packing style: {style}")
     print(f"Requested layout: {layout}")
     print(f"Extra spacing: +{extra_spacing} mm (on top of auto per-size pitch)")
     if magnet:
@@ -644,7 +802,7 @@ def generate(boxi_size, fraction, layout, output_path="tray.stl",
 
     mesh, placements, summary, (pw, ph), plate_t = build_tray(
         boxi_size, fraction, layout, clearance=clearance,
-        extra_spacing=extra_spacing, magnet=magnet,
+        extra_spacing=extra_spacing, magnet=magnet, style=style,
     )
 
     print(f"Plate (main): {pw} x {ph} mm  (thickness {plate_t:.2f} mm)")
@@ -835,6 +993,14 @@ def interactive():
 
     layout = prompt_layout()
 
+    print()
+    print("Packing style:")
+    print("  1) banded   — same-size rows, largest at top, clean and intentional")
+    print("  2) fractal  — mixed sizes inter-mingle organically (Apollonian-ish)")
+    style_choice = _ask("Pick style", default='1',
+                        validator=_validate_choice(('1', '2')))
+    style = 'fractal' if style_choice == '2' else 'banded'
+
     print("\nSpacing is auto-set per base size from MODEL_ENVELOPE so adjacent")
     print("minis don't physically collide above the tray (e.g. Intercessor")
     print("shoulders/bolters). You can add extra padding on top of that.")
@@ -848,12 +1014,13 @@ def interactive():
 
     print()
     print("-" * 60)
-    return boxi_size, fraction, layout, extra, output_path, adv
+    return boxi_size, fraction, layout, extra, output_path, adv, style
 
 
 if __name__ == "__main__":
     try:
-        boxi_size, fraction, layout, extra, output_path, adv = interactive()
+        (boxi_size, fraction, layout, extra,
+         output_path, adv, style) = interactive()
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.")
         raise SystemExit(1)
@@ -861,4 +1028,5 @@ if __name__ == "__main__":
     generate(boxi_size, fraction, layout,
              output_path=output_path,
              extra_spacing=extra,
-             magnet=adv.get('magnet'))
+             magnet=adv.get('magnet'),
+             style=style)

@@ -6,8 +6,10 @@ Project home: [github.com/guaranaja/modi_trayhammer](https://github.com/guaranaj
 
 ## What it does
 
-- **Interactive prompts** — no editing source needed. Pick Boxi fraction, layout, output filename.
-- **Graceful banded packing** — each base size occupies one horizontal band, largest at the top, items centered with equal spacing. Falls back to hex packing per band if needed to fit, then drops items (preferring drops that eliminate full rows) if still too tall.
+- **Interactive prompts** — no editing source needed. Pick Boxi fraction, layout, packing style, output filename.
+- **Two packing styles**:
+    - **Banded** *(default)* — each base size in one horizontal row, largest at top, items centered with equal spacing. Hex fallback per band when tight. Maximum density, intentional look.
+    - **Fractal** — Apollonian-inspired greedy packing. Largest item anchors the center, subsequent items snug into the tightest valid tangent position (tangent-to-one, tangent-to-two, or tangent-to-edge). Mixed sizes intermingle organically. Lower density than banded — trade density for aesthetic.
 - **Model-envelope-aware spacing** — center-to-center pitch is auto-set per base size from a table of typical model widths (e.g. Intercessors on 32mm bases need ~42mm pitch, not 35mm, to keep shoulders and bolters from touching). Add extra padding interactively if you want more breathing room.
 - **Overpopulation alarm** — if your layout doesn't fit, you get a loud, specific warning telling you what was dropped and how to fix it.
 - **Washer pockets (advanced option)** — drill a centered pocket into each recess floor sized for a standard metric flat washer (M2–M5). Drop a washer in, glue a magnet into your mini's base, and the mini sticks — no polarity issues, since steel attracts both poles equally. Plate thickness auto-bumps if the washer is thicker than the existing floor.
@@ -30,9 +32,10 @@ The script walks you through:
 
 1. **Fraction** — `1/3`, `2/3`, or `3/3` of a Large Boxi
 2. **Layout** — either use the default `{32: 20, 40: 4, 60: 1}` or loop through adding `(base_size, count)` entries
-3. **Extra spacing** — additional mm beyond the auto-computed per-size pitch (default `0`)
-4. **Output filename** — default `tray.stl`
-5. **Advanced options** *(optional)* — washer pockets
+3. **Packing style** — `1` banded (dense, intentional) or `2` fractal (organic, less dense)
+4. **Extra spacing** — additional mm beyond the auto-computed per-size pitch (default `0`)
+5. **Output filename** — default `tray.stl`
+6. **Advanced options** *(optional)* — washer pockets
 
 ## Supported base sizes (mm)
 
