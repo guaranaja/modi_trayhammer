@@ -114,6 +114,17 @@ MAGNET_OPTIONS = (
 MAGNET_HOLE_CLEARANCE = 0.20  # mm — added to insert diameter for fit
 MAGNET_FLOOR_MIN      = 0.40  # mm — minimum material below pocket bottom
 
+# Lift-screw hole sizes. Self-tap sizes — print, then drive your own thumb-
+# knob/screw straight in (or melt a brass heat-set insert if you'll remove
+# the tray often). (label, hole_OD_mm, hint).
+KNOB_HOLE_OPTIONS = (
+    ("M3 (2.7 mm hole)", 2.7, "small — self-tap, fits M3 screw"),
+    ("M4 (3.5 mm hole)", 3.5, "medium — self-tap, fits M4 screw"),
+    ("M5 (4.5 mm hole)", 4.5, "common — self-tap, fits M5 knob"),
+    ("M6 (5.3 mm hole)", 5.3, "robust — self-tap, fits M6 knob"),
+)
+KNOB_RECESS_CLEARANCE = 2.0   # mm — min gap from any recess edge
+
 
 # ---------------------------------------------------------------------------
 # Mesh container
@@ -750,8 +761,85 @@ def build_outer_polygon(plate_w, plate_h, with_tabs=True):
     return poly
 
 
+def _find_knob_positions(plate_w, plate_h, hole_r, placements,
+                         margin_x, margin_y, count=2,
+                         recess_clearance=KNOB_RECESS_CLEARANCE):
+    """
+    Find `count` non-conflicting positions for lift-screw holes.
+
+    Strategy: pick preferred slots (corner offsets for count=1/2/4) and,
+    for each, search outward in a spiral until a clear spot is found.
+    Already-placed knob holes are also treated as obstacles.
+    """
+    edge_pad = hole_r + 1.0
+    corner_in = max(15.0, margin_x + hole_r + 2.0)  # how far inside corner
+
+    center = (plate_w / 2, plate_h / 2)
+    top_corners = [
+        (corner_in, plate_h - corner_in),                # TL
+        (plate_w - corner_in, plate_h - corner_in),      # TR
+    ]
+    bot_corners = [
+        (corner_in, corner_in),                          # BL
+        (plate_w - corner_in, corner_in),                # BR
+    ]
+    if count == 1:
+        preferred = [center]
+    elif count == 2:
+        preferred = top_corners
+    elif count == 3:
+        preferred = [center] + top_corners
+    elif count == 4:
+        preferred = top_corners + bot_corners
+    else:  # 5
+        preferred = [center] + top_corners + bot_corners
+
+    placed_knobs = []  # already-chosen knob centers
+
+    def clear(cx, cy):
+        if cx - hole_r < margin_x + edge_pad - 1e-6:
+            return False
+        if cx + hole_r > plate_w - margin_x - edge_pad + 1e-6:
+            return False
+        if cy - hole_r < margin_y + edge_pad - 1e-6:
+            return False
+        if cy + hole_r > plate_h - margin_y - edge_pad + 1e-6:
+            return False
+        for ex, ey, ed in placements:
+            er = ed / 2
+            if math.hypot(cx - ex, cy - ey) < er + hole_r + recess_clearance:
+                return False
+        for kx, ky in placed_knobs:
+            if math.hypot(cx - kx, cy - ky) < 2 * hole_r + recess_clearance:
+                return False
+        return True
+
+    def spiral_from(px, py):
+        if clear(px, py):
+            return (px, py)
+        step = 3.0
+        max_r = math.hypot(plate_w, plate_h) / 2
+        radius = step
+        while radius <= max_r:
+            for k in range(24):
+                ang = 2 * math.pi * k / 24
+                cx = px + radius * math.cos(ang)
+                cy = py + radius * math.sin(ang)
+                if clear(cx, cy):
+                    return (cx, cy)
+            radius += step
+        return None
+
+    for px, py in preferred:
+        pos = spiral_from(px, py)
+        if pos is not None:
+            placed_knobs.append(pos)
+
+    return placed_knobs
+
+
 def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
-               extra_spacing=0.0, magnet=None, style='banded'):
+               extra_spacing=0.0, magnet=None, style='banded', knob=None):
     """
     Build a tray Mesh.
 
@@ -759,6 +847,9 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
             If present, each recess gets a centered cylindrical pocket sized
             for the magnet. Plate thickness is bumped if needed to keep the
             pocket blind (>= MAGNET_FLOOR_MIN of material under it).
+    knob:   optional dict {'d': hole_diameter_mm, 'label': str}.
+            If present, drill a through-hole for a self-tap lift screw at
+            the first non-conflicting position (center, spiraling outward).
     """
     key = (boxi_size, fraction)
     if key not in BOXI_SIZES:
@@ -789,6 +880,23 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
         if plate_t < min_plate_t:
             plate_t = min_plate_t
 
+    knob_positions = []
+    knob_r = None
+    if knob is not None:
+        knob_r = knob['d'] / 2
+        knob_positions = _find_knob_positions(
+            plate_w, plate_h, knob_r, placements,
+            EDGE_MARGIN_X, EDGE_MARGIN_Y,
+            count=knob.get('count', 2),
+        )
+        if not knob_positions:
+            print(f"  WARNING: couldn't find any clear spot for "
+                  f"{knob['label']} lift-screw holes — skipping them")
+            knob = None
+        elif len(knob_positions) < knob.get('count', 2):
+            print(f"  NOTE: only {len(knob_positions)} of "
+                  f"{knob['count']} knob holes fit; placed what fit")
+
     mesh = Mesh()
     top_z = plate_t
     recess_bottom_z = plate_t - recess_d
@@ -797,8 +905,16 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
     outer = build_outer_polygon(plate_w, plate_h, with_tabs=True)
 
     # ---- Plate bottom (normal -Z) ----
-    verts_2d = np.array(outer, dtype=np.float64)
-    rings = np.array([len(outer)], dtype=np.uint32)
+    bot_rings_data = list(outer)
+    bot_ring_ends = [len(bot_rings_data)]
+    for cx_k, cy_k in knob_positions:
+        for i in range(CIRCLE_SEGMENTS):
+            ang = -2 * math.pi * i / CIRCLE_SEGMENTS  # CW from +Z = hole
+            bot_rings_data.append((cx_k + knob_r * math.cos(ang),
+                                   cy_k + knob_r * math.sin(ang)))
+        bot_ring_ends.append(len(bot_rings_data))
+    verts_2d = np.array(bot_rings_data, dtype=np.float64)
+    rings = np.array(bot_ring_ends, dtype=np.uint32)
     idx = earcut.triangulate_float64(verts_2d, rings).reshape(-1, 3)
     for i, j, k in idx:
         # Viewed from below; reverse winding from earcut's CCW-from-above.
@@ -826,7 +942,7 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
             (x0, y0, top_z),
         )
 
-    # ---- Plate top with circular holes ----
+    # ---- Plate top with circular holes (recesses + optional knob hole) ----
     rings_data = list(outer)
     ring_ends = [len(rings_data)]
     for cx, cy, d in placements:
@@ -834,6 +950,12 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
         for i in range(CIRCLE_SEGMENTS):
             ang = -2 * math.pi * i / CIRCLE_SEGMENTS  # CW for holes
             rings_data.append((cx + r*math.cos(ang), cy + r*math.sin(ang)))
+        ring_ends.append(len(rings_data))
+    for cx_k, cy_k in knob_positions:
+        for i in range(CIRCLE_SEGMENTS):
+            ang = -2 * math.pi * i / CIRCLE_SEGMENTS
+            rings_data.append((cx_k + knob_r * math.cos(ang),
+                               cy_k + knob_r * math.sin(ang)))
         ring_ends.append(len(rings_data))
 
     verts_top = np.array(rings_data, dtype=np.float64)
@@ -861,6 +983,19 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
             top1 = (x1, y1, top_z)
             bot0 = (x0, y0, recess_bottom_z)
             bot1 = (x1, y1, recess_bottom_z)
+            mesh.quad(top0, top1, bot1, bot0)
+
+    # ---- Knob through-hole side walls (top_z → 0) ----
+    for cx_k, cy_k in knob_positions:
+        for i in range(CIRCLE_SEGMENTS):
+            a0 = 2 * math.pi * i / CIRCLE_SEGMENTS
+            a1 = 2 * math.pi * (i + 1) / CIRCLE_SEGMENTS
+            x0, y0 = cx_k + knob_r * math.cos(a0), cy_k + knob_r * math.sin(a0)
+            x1, y1 = cx_k + knob_r * math.cos(a1), cy_k + knob_r * math.sin(a1)
+            top0 = (x0, y0, top_z)
+            top1 = (x1, y1, top_z)
+            bot0 = (x0, y0, 0)
+            bot1 = (x1, y1, 0)
             mesh.quad(top0, top1, bot1, bot0)
 
     # ---- Recess bottoms (annulus + magnet pocket, or plain disk) ----
@@ -946,17 +1081,21 @@ def build_tray(boxi_size, fraction, layout, clearance=DEFAULT_CLEARANCE,
 
 def generate(boxi_size, fraction, layout, output_path="tray.stl",
              clearance=DEFAULT_CLEARANCE, extra_spacing=0.0, magnet=None,
-             style='banded'):
+             style='banded', knob=None):
     print(f"Boxi: {boxi_size}, Fraction: {fraction}")
     print(f"Packing style: {style}")
     print(f"Requested layout: {layout}")
     print(f"Extra spacing: +{extra_spacing} mm (on top of auto per-size pitch)")
     if magnet:
         print(f"Washer pocket: {magnet['label']}")
+    if knob:
+        cnt = knob.get('count', 2)
+        plural = 'holes' if cnt > 1 else 'hole'
+        print(f"Lift-screw {plural} ({cnt}x): {knob['label']}")
 
     mesh, placements, summary, (pw, ph), plate_t = build_tray(
         boxi_size, fraction, layout, clearance=clearance,
-        extra_spacing=extra_spacing, magnet=magnet, style=style,
+        extra_spacing=extra_spacing, magnet=magnet, style=style, knob=knob,
     )
 
     print(f"Plate (main): {pw} x {ph} mm  (thickness {plate_t:.2f} mm)")
@@ -1070,6 +1209,13 @@ def _validate_magnet_choice(s):
     return n
 
 
+def _validate_knob_choice(s):
+    n = int(s)
+    if not (1 <= n <= len(KNOB_HOLE_OPTIONS)):
+        raise ValueError(f"must be between 1 and {len(KNOB_HOLE_OPTIONS)}")
+    return n
+
+
 def prompt_advanced_options():
     """Returns a dict with optional keys: 'magnet'."""
     opts = {}
@@ -1099,6 +1245,30 @@ def prompt_advanced_options():
             print(f"  Note: plate thickness will be bumped from "
                   f"{PLATE_THICKNESS:.1f} to {need:.2f} mm to keep "
                   f"{MAGNET_FLOOR_MIN} mm under the pocket.")
+
+    print()
+    print("Lift-screw holes — through-holes for thumb knobs or screws so you")
+    print("can pull the tray straight up out of the Boxi rails. Auto-placed")
+    print("at preferred corner positions; if any conflict with a recess the")
+    print("packer searches outward for the nearest clear spot.")
+    print()
+    if _ask_yn("  Add lift-screw holes?", default=False):
+        print()
+        print("  Hole sizes (self-tap or use a brass insert):")
+        for i, (label, _d, hint) in enumerate(KNOB_HOLE_OPTIONS):
+            print(f"    {i+1}) {label}  — {hint}")
+        choice = _ask("  Pick a size (number)",
+                      validator=_validate_knob_choice,
+                      error_msg=f"must be 1..{len(KNOB_HOLE_OPTIONS)}")
+        label, dia, _hint = KNOB_HOLE_OPTIONS[choice - 1]
+        print("    1 = center")
+        print("    2 = top corners")
+        print("    3 = center + top corners")
+        print("    4 = all four corners")
+        print("    5 = center + all four corners")
+        count = _ask("  How many holes (1..5)?", default='3',
+                     validator=_validate_choice(('1', '2', '3', '4', '5')))
+        opts['knob'] = {'d': dia, 'label': label, 'count': int(count)}
 
     return opts
 
@@ -1185,4 +1355,5 @@ if __name__ == "__main__":
              output_path=output_path,
              extra_spacing=extra,
              magnet=adv.get('magnet'),
+             knob=adv.get('knob'),
              style=style)
