@@ -57,10 +57,12 @@ import mapbox_earcut as earcut
 
 # Dimensions in mm. Key: (boxi_size, fraction) -> (plate_width, plate_depth)
 # Width is the MAIN PLATE width (without tabs). Outer bbox is plate_width + 2*TAB_PROTRUSION.
+# Sized for a Large Boxi with an inside cavity of 204.5 x 204.5 mm; body is
+# 204.0 (0.25 mm clearance per side). 1/3 + 2/3 stack to fill 3/3 exactly.
 BOXI_SIZES = {
-    ('L', '1/3'): (203.50, 64.15),
-    ('L', '2/3'): (203.50, 133.49),
-    ('L', '3/3'): (203.50, 206.40),
+    ('L', '1/3'): (204.00,  68.00),
+    ('L', '2/3'): (204.00, 136.00),
+    ('L', '3/3'): (204.00, 204.00),
 }
 
 PLATE_THICKNESS   = 5.0     # mm — total tray thickness
