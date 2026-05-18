@@ -114,14 +114,24 @@ MAGNET_OPTIONS = (
 MAGNET_HOLE_CLEARANCE = 0.20  # mm — added to insert diameter for fit
 MAGNET_FLOOR_MIN      = 0.40  # mm — minimum material below pocket bottom
 
-# Lift-screw hole sizes. Self-tap sizes — print, then drive your own thumb-
-# knob/screw straight in (or melt a brass heat-set insert if you'll remove
-# the tray often). (label, hole_OD_mm, hint).
+# Lift-screw hole sizes. Two flavors:
+#   self-tap  — drive the screw directly into plastic, threads are
+#               temporary. Quick and cheap; fine for occasional removal.
+#   heat-set  — bore sized for a standard brass heat-set insert (Ruthex,
+#               CNC Kitchen, etc). Melt it in once, then screw a steel
+#               thumb knob in and out as often as you like. Strong and
+#               permanent. Pick a short-style insert (M3 ~4mm, M4 ~5mm)
+#               for the 5mm plate, or let it go through.
+# (label, hole_diameter_mm, kind, hint)
 KNOB_HOLE_OPTIONS = (
-    ("M3 (2.7 mm hole)", 2.7, "small — self-tap, fits M3 screw"),
-    ("M4 (3.5 mm hole)", 3.5, "medium — self-tap, fits M4 screw"),
-    ("M5 (4.5 mm hole)", 4.5, "common — self-tap, fits M5 knob"),
-    ("M6 (5.3 mm hole)", 5.3, "robust — self-tap, fits M6 knob"),
+    ("M3 (2.7 mm)",  2.7, "self-tap", "screw drives directly into plastic"),
+    ("M4 (3.5 mm)",  3.5, "self-tap", "screw drives directly into plastic"),
+    ("M5 (4.5 mm)",  4.5, "self-tap", "screw drives directly into plastic"),
+    ("M6 (5.3 mm)",  5.3, "self-tap", "screw drives directly into plastic"),
+    ("M3 (4.0 mm)",  4.0, "heat-set", "M3 brass insert"),
+    ("M4 (5.6 mm)",  5.6, "heat-set", "M4 brass insert"),
+    ("M5 (6.4 mm)",  6.4, "heat-set", "M5 brass insert"),
+    ("M6 (8.0 mm)",  8.0, "heat-set", "M6 brass insert"),
 )
 KNOB_RECESS_CLEARANCE = 2.0   # mm — min gap from any recess edge
 
@@ -1091,7 +1101,8 @@ def generate(boxi_size, fraction, layout, output_path="tray.stl",
     if knob:
         cnt = knob.get('count', 2)
         plural = 'holes' if cnt > 1 else 'hole'
-        print(f"Lift-screw {plural} ({cnt}x): {knob['label']}")
+        kind = knob.get('kind', 'self-tap')
+        print(f"Lift-screw {plural} ({cnt}x, {kind}): {knob['label']}")
 
     mesh, placements, summary, (pw, ph), plate_t = build_tray(
         boxi_size, fraction, layout, clearance=clearance,
@@ -1254,13 +1265,20 @@ def prompt_advanced_options():
     print()
     if _ask_yn("  Add lift-screw holes?", default=False):
         print()
-        print("  Hole sizes (self-tap or use a brass insert):")
-        for i, (label, _d, hint) in enumerate(KNOB_HOLE_OPTIONS):
-            print(f"    {i+1}) {label}  — {hint}")
+        print("  --- Self-tap (drive screw directly into plastic) ---")
+        for i, (label, _d, kind, hint) in enumerate(KNOB_HOLE_OPTIONS):
+            if kind == "self-tap":
+                print(f"      {i+1}) {label}  — {hint}")
+        print("  --- Heat-set insert (melt brass insert in for permanent threads) ---")
+        for i, (label, _d, kind, hint) in enumerate(KNOB_HOLE_OPTIONS):
+            if kind == "heat-set":
+                print(f"      {i+1}) {label}  — {hint}")
         choice = _ask("  Pick a size (number)",
                       validator=_validate_knob_choice,
                       error_msg=f"must be 1..{len(KNOB_HOLE_OPTIONS)}")
-        label, dia, _hint = KNOB_HOLE_OPTIONS[choice - 1]
+        label, dia, kind, _hint = KNOB_HOLE_OPTIONS[choice - 1]
+        print()
+        print("  Hole count:")
         print("    1 = center")
         print("    2 = top corners")
         print("    3 = center + top corners")
@@ -1268,7 +1286,8 @@ def prompt_advanced_options():
         print("    5 = center + all four corners")
         count = _ask("  How many holes (1..5)?", default='3',
                      validator=_validate_choice(('1', '2', '3', '4', '5')))
-        opts['knob'] = {'d': dia, 'label': label, 'count': int(count)}
+        opts['knob'] = {'d': dia, 'label': label, 'kind': kind,
+                        'count': int(count)}
 
     return opts
 
